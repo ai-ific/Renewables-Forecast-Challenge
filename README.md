@@ -1,1 +1,1 @@
-# Renewables-Forecast-Challenge
+# Renewables Forecast Challenge : 1st Hackday @IFIC
