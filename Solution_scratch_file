@@ -1,0 +1,232 @@
+# Header - imports
+
+import pandas as pd
+import datetime
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM
+from tensorflow.keras.optimizers import Adam, Nadam
+from tensorflow.keras.callbacks import EarlyStopping
+print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+sns.set_style('dark')
+plt.rcParams['font.size'] = 16
+
+# Data mining
+
+## Load meteo information from csv file 'Meteo.csv' and power supply/demand from xls file 'Datos_solar_y_demanda_residencial.xlsx'
+
+data = pd.read_csv("Meteo.csv", parse_dates=[['Date', 'Time']])
+df = pd.read_excel("Datos_solar_y_demanda_residencial.xlsx")
+
+## Round time stamps of the samples so that they coincide if they differ by less than 5 minutes, so that one can merge meteo and power supply data later on
+
+def round_to_5min(t):
+    delta = datetime.timedelta(minutes=t.minute%5, 
+                               seconds=t.second, 
+                               microseconds=t.microsecond)
+    t -= delta
+    if delta > datetime.timedelta(0):
+        t += datetime.timedelta(minutes=5)
+    return t
+    
+data['DateRound'] = data["Date_Time"].dt.round("5min")
+df['DateRound'] = df['Date'].dt.round("5min")
+
+## Create new columns in meteo dataframe to save hour and day
+
+data['Hour'] = data['DateRound'].dt.hour
+data['Day'] = data['DateRound'].dt.dayofyear
+
+## Delete unit acronyms and remove 'nan' columns from meteo dataframe
+
+def clean(x):
+    try:
+        return  x.str.replace(r"[a-zA-Z\%\/²]",'')
+    except:
+        return x
+        
+data = data.apply(lambda x : clean(x))
+data = data.drop(columns=['UV', 'Solar','Wind'])
+
+## Create "filtered" dataframe dropping null columns from the original dataframes
+
+data_filtered = data[['DateRound', 'Temperature', 'Dew Point','Humidity', 'Speed', 'Gust', 'Pressure', 'Precip. Rate.', 'Precip. Accum.','Hour', 'Day']]
+df_filtered = df[['DateRound','Demanda (W)', 'PV Tejado (W)', 'PV2 Parque (W)']]
+
+## Finally, merge the meteo and power supply/demand data corresponding to same rounded time, then remove date/time stamps and cast the datatype to float
+
+pfinal = pd.merge(df_filtered,data_filtered, on='DateRound')
+del pfinal['DateRound']
+pfinal = pfinal.astype(float)
+
+## The time series we want to learn is now stored in pfinal.
+
+# Transforming data in a normalized dataset matrix
+
+## Let us transform the time series in a proper dataset matrix to feed the neural network with.
+## Given a time window (hours of lag + hours of prediction), the following function transforms a time-ordered dataset in a pair of datasets X and Y.
+## We want the model to predict the time series Y from the knowledge of the time series in Y. X will contain a number of hours equal to 'lag' while
+## Y will contain 'pred_len' hours. The 'features' variable is a list of strings labeling the columns (data) we want to use. The quantity we wish to 
+## predict must be in the first place, i.e. features[0].
+
+def create_dataset(dataset, lag, pred_len, features):
+    dataX, dataY = [], []
+    for i in range(len(dataset) - lag - pred_len):
+        a = dataset.loc[i: i + lag - 1, features].values
+        dataX.append(a)
+        if pred_len == 1:
+            dataY.append(dataset.loc[i + lag, features[0]])
+        else:
+            dataY.append(dataset.loc[i + lag: i + lag + pred_len-1, features[0]])
+    return np.reshape(dataX, (len(dataX), lag, len(features))), np.reshape(dataY, (len(dataY), pred_len))
+
+## If, for example, we wanted to predict the power supply from solar panels 'PV Tejado (W)', using 6 hours lag to predict 3 hours into the future,
+## our code would look like
+
+lag = 6
+pred_len = 3
+features = ['PV Tejado (W)', 'Temperature', 'Dew Point', 'Humidity', 'Speed',
+            'Gust', 'Pressure', 'Precip. Rate.', 'Precip. Accum.', 'Hour', 'Day']
+x_raw, y_raw = create_dataset(pfinal, lag, pred_len, features)
+
+## Normalize data with a min-max scaler
+
+x_min = x_raw.min(axis=0)
+x_max = x_raw.max(axis=0)
+y_min = y_raw.min(axis=0)
+y_max = y_raw.max(axis=0)
+x_set = (x_raw - x_min) / (x_max - x_min)
+y_set = (y_raw - y_min) / (y_max - y_min)
+
+## Shuffle data to prevent learning to be spoiled by the order in which data was presented
+
+idx = np.arange(x_set.shape[0])
+np.random.shuffle(idx)
+x = x_set[idx]
+y = y_set[idx]
+
+## Divide data in training + test datasets
+
+train_size = 8000
+x_train, x_test = x[:train_size], x[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+
+# The model
+
+## Define a builder function. Builder takes input and output shape as variables, so that different time windows can be used withoud redefining
+## the function. Modify the function to modify the architecture of the NN.
+
+def build_model(inputshape, outputshape):    
+    model = Sequential([
+        LSTM(50, activation='elu',  return_sequences=True, input_shape=inputshape),
+        LSTM(25, activation='elu'),
+        Dense(outputshape)])
+    model.compile(optimizer=Nadam(),
+                loss='mae',
+                metrics=['mse'])
+    return model
+
+## Build the model
+
+model = build_model(x_train.shape[1:], y_train.shape[1])
+
+## Train the model. A callback is invoked to interrupt the training when the validation error stops improving.
+
+history = model.fit(x_train, y_train,
+                    batch_size=64,
+                    epochs=100,
+                    callbacks=[EarlyStopping(monitor='val_loss', patience=10)],
+                    verbose=1,
+                    validation_split=0.1,
+                    shuffle=True)
+                    
+## Plot the history if you want a visual summary of the model training.
+
+def histplot(history, metrics='mse'):
+    hist = pd.DataFrame(history.history)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    hist.plot(y=['loss', 'val_loss'], ax=ax1)
+    min_loss = hist['val_loss'].min()
+    ax1.hlines(min_loss, 0, len(hist), linestyle='dotted',
+               label='min(val_loss) = {:.3f}'.format(min_loss))
+    ax1.legend()
+    hist.plot(y=[metrics, 'val_{}'.format(metrics)], ax=ax2)
+    min_metrics = hist['val_{}'.format(metrics)].min()
+    ax2.hlines(min_metrics, 0, len(hist), linestyle='dotted',
+               label='min(val_{}) = {:.3f}'.format(metrics, min_metrics))
+    ax2.legend()
+    
+## Test the model using global scores on the test set
+
+loss, mse = model.evaluate(x_test, y_test, verbose=0)
+
+## Or make an error plot
+
+def errorplot(error, bins=50):
+    n_er = error.shape[1]
+    plt.subplots(1, n_er, figsize=(18, 5))
+    for n in range(n_er):
+        print('Test rmse hour{}:'.format(n), np.sqrt(np.mean(np.square(error[:, n]))))
+        plt.subplot(1, n_er, n+1)
+        plt.hist(error[:, n], bins=bins)
+        if n == 0:
+            plt.ylabel("Count")
+        plt.xlabel("Hour {} prediction error".format(n))
+    plt.show()
+
+test_prediction_w = model.predict(x_test) * (y_max - y_min) + y_min # prediction of the model (note the inverse min-max scaler)
+y_test_w = y_test * (y_max - y_min) + y_min # content of the normalized dataset, restored back to the original units
+error = test_prediction_w - y_test_w # Error in the original units. Feed this to the errorplot function
+
+# Repeat training multiple times to estimate the error. Weights are reinitialized each time (actually, a new model is created each time with random
+# initialization of the weights). Each time data is shuffled before dividing it in training and test dataset.
+
+def multiple_repeats(x_set_in, y_set_in, y_in_min, y_in_max,
+                     repeats=30, n_test=200, batch_size=128, epochs=100, patience=10, val_split=0.1):
+    idx_n = np.arange(x_set_in.shape[0])
+    error_scores = np.empty((repeats, y_set_in.shape[1]))
+    for n in range(repeats):
+        
+        # Shuffle data
+        np.random.shuffle(idx_n)
+        x_n = x_set_in[idx_n]
+        y_n = y_set_in[idx_n]
+        
+        # Divide data into training and test datasets
+        x_train_n, x_test_n = x_n[:-n_test], x_n[-n_test:]
+        y_train_n, y_test_n = y_n[:-n_test], y_n[-n_test:]
+        
+        # Build and train the model
+        model_n = build_model(x_train_n.shape[1:], y_train_n.shape[1])
+        model_n.fit(x_train_n, y_train_n, batch_size=batch_size, epochs=epochs,
+                        callbacks=[EarlyStopping(monitor='val_loss', patience=patience)],
+                        verbose=0,
+                        validation_split=val_split,
+                        shuffle=True)
+        
+        # Test the model's performance and save the score
+        test_prediction_w_n = model_n.predict(x_test_n) * (y_in_max - y_in_min) + y_in_min
+        y_test_w_n = y_test_n * (y_in_max - y_in_min) + y_in_min
+        error_n = test_prediction_w_n - y_test_w_n
+        error_scores[n] = np.sqrt(np.mean(np.square(error_n), axis=0))
+        print('({}/{}) Test rmse:'.format(n + 1, repeats), error_scores[n])
+    
+    column_names = ['Hour {} rmse'.format(_) for _ in range(error_scores.shape[1])]
+    return pd.DataFrame(error_scores, columns=column_names)
+
+## Calling the above function with normalized datasets x and y, together with the minmax scaler parameters for y, returns the results of multiple
+## runs of the model in a dataframe. For example:
+
+results = multiple_repeats(x_set, y_set, y_min, y_max)
+
+## One can then use pandas functions to obtain the average error
+
+print(results.describe())
+
+## Or plot the error obtained in multiple repeats with a box and whisker plot
+
+results.boxplot()
+plt.show()
