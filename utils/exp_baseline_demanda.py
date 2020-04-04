@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar 16 11:25:44 2020
+
+@author: 
+"""
+import warnings
+warnings.filterwarnings("ignore")
+
+import data_loading
+import data_viz
+import processing_utils
+import deep_learning
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from keras.callbacks import EarlyStopping #, ModelCheckpoint
+from math import sqrt
+
+
+if __name__ == "__main__":
+    # loading data
+    meteo_df = data_loading.load_dataframe('data/Meteo.csv', parse_dates=[['Date', 'Time']])
+    xls_df = data_loading.load_dataframe('data/Datos_solar_y_demanda_residencial.xlsx')
+    
+    # common time
+    meteo_df['DateRound'] = meteo_df['Date_Time'].dt.round('5min')
+    xls_df['DateRound'] = xls_df['Date'].dt.round('5min')
+    meteo_df['Hour'] = meteo_df['DateRound'].dt.hour
+    meteo_df['Day'] = meteo_df['DateRound'].dt.dayofyear
+    
+    # Parse data
+    meteo_df['WindNum'] = data_loading.wind_to_num(meteo_df['Wind'])
+    meteo_df = meteo_df.apply(lambda x : data_loading.clean(x))
+    
+    # Drop columns
+    meteo_df = meteo_df.drop(columns=['UV', 'Solar','Wind'])
+    
+    # Filter variables
+    meteo_filtered = meteo_df[['DateRound', 'Temperature', 'Dew Point','Humidity', 'Speed', 'Gust', 'Pressure', 'Precip. Rate.', 'Precip. Accum.','WindNum','Hour', 'Day']]
+    xls_filtered = xls_df[['DateRound', 'Demanda (W)']]
+    
+    # Merge dataframes
+    final_df = pd.merge(xls_filtered, meteo_filtered, on='DateRound')
+    final_df = final_df.drop(columns=['DateRound'])
+    
+    # A correlation matrix to understand the data
+    final_df = final_df.astype(np.float32)
+    correlation = final_df.corr()
+
+    # Select variables 
+    selected_columns = ['Hour', 'Temperature', 'Dew Point', 'Humidity', 'Pressure', 'Demanda (W)']
+    working_df = final_df[selected_columns]
+    
+    # Dataset setting up & normalization
+    time_steps = 3
+    n_features = len(selected_columns)
+    norm_dataset, scaler = processing_utils.normalize_data(working_df) 
+    dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
+
+    # Train test split, data and target split and reshaping of input data for the network
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False)
+    Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
+    Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
+    Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
+    Xte = Xte.reshape(Xte.shape[0], time_steps, n_features)
+    
+    # Deep learning model setting up, callback definition and training
+    # model set up
+    n_layers = 1
+    n_units = 50
+    epochs= 50
+    batch_size = 64
+    
+    # callback
+    # best_model_filename = 'best_LSTM_model_{epoch:02d}.h5'
+    #checkpointer = ModelCheckpoint(best_model_filename, monitor='val_loss', verbose=1, save_best_only=True)
+    earlystopper = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    
+    '''
+    model = deep_learning.LSTMNet(units=n_units, 
+                                  input_size=(Xtr.shape[1], Xtr.shape[2]))
+
+    model = deep_learning.LSTMNet(units=n_units, 
+                                  input_size=(batch_size, Xtr.shape[1], Xtr.shape[2]), 
+                                  stateful=True)
+
+   
+    
+    rmse_df = deep_learning.run_experiment(model, Xtr, Ytr, Xte, Yte,
+                   callback = [earlystopper],
+                   epochs = epochs,
+                   batch_size = batch_size,
+                   repeats = 30,
+                   validation_split = .1,
+                   scaler = scaler, 
+                   verbose = True)
+    '''    
+    '''
+    Solo queda la repeticion de experimentos y la mejora de la seleccion de redes
+    '''
+    EPOCHS = 50
+    BATCHSIZE = 64
+    result_filenames = list()
+    '''
+    1st Experiment. Baseline
+    Input: Energy demand of 3 previous hours to hour t
+    Output: Energy demand of hour t
+    Network: One LSTM layer with 12 units
+    '''
+    time_steps = 3
+    n_units = 12
+    selected_columns = ['Demanda (W)']
+    n_features = len(selected_columns)
+    working_df = final_df[selected_columns]
+    norm_dataset, scaler = processing_utils.normalize_data(working_df)
+    dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False, random_state=20132018)
+    Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
+    Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
+    Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
+    Xte = Xte.reshape(Xte.shape[0], time_steps, n_features)    
+    model = deep_learning.LSTMNet(units=n_units, 
+                                  input_size=(Xtr.shape[1], Xtr.shape[2]))
+    rmse_df = deep_learning.run_experiment(model, Xtr, Ytr, Xte, Yte,
+                   callback = [earlystopper],
+                   epochs = EPOCHS,
+                   batch_size = BATCHSIZE,
+                   repeats = 30,
+                   validation_split = .1,
+                   scaler = scaler, 
+                   verbose = True)
+    result_filenames.append('baseline_12.csv')
+    rmse_df.to_csv(result_filenames[-1], index=False)
+    
+    '''
+    2nd Experiment. Baseline II
+    Input: Energy demand of 3 previous hours to hour t
+    Output: Energy demand of hour t
+    Network: One LSTM layer with 50 units
+    '''
+    time_steps = 3
+    n_units = 50
+    selected_columns = ['Demanda (W)']
+    n_features = len(selected_columns)
+    working_df = final_df[selected_columns]
+    norm_dataset, scaler = processing_utils.normalize_data(working_df)
+    dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False, random_state=20132018)
+    Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
+    Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
+    Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
+    Xte = Xte.reshape(Xte.shape[0], time_steps, n_features)    
+    model = deep_learning.LSTMNet(units=n_units, 
+                                  input_size=(Xtr.shape[1], Xtr.shape[2]))
+    rmse_df = deep_learning.run_experiment(model, Xtr, Ytr, Xte, Yte,
+                   callback = [earlystopper],
+                   epochs = EPOCHS,
+                   batch_size = BATCHSIZE,
+                   repeats = 30,
+                   validation_split = .1,
+                   scaler = scaler, 
+                   verbose = True)
+    result_filenames.append('baseline_50.csv')
+    rmse_df.to_csv(result_filenames[-1], index=False)
+    
+    '''
+    3rd Experiment. Baseline III
+    Input: Energy demand of 3 previous hours to hour t
+    Output: Energy demand of hour t
+    Network: LSTM layers with 50 and 10 units
+    '''
+    time_steps = 3
+    n_units = [50, 10]
+    selected_columns = ['Demanda (W)']
+    n_features = len(selected_columns)
+    working_df = final_df[selected_columns]
+    norm_dataset, scaler = processing_utils.normalize_data(working_df)
+    dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False, random_state=20132018)
+    Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
+    Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
+    Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
+    Xte = Xte.reshape(Xte.shape[0], time_steps, n_features)    
+    model = deep_learning.LSTMNet(units=n_units, 
+                                  input_size=(Xtr.shape[1], Xtr.shape[2]))
+    model.summary()
+    rmse_df = deep_learning.run_experiment(model, Xtr, Ytr, Xte, Yte,
+                   callback = [earlystopper],
+                   epochs = EPOCHS,
+                   batch_size = BATCHSIZE,
+                   repeats = 30,
+                   validation_split = .1,
+                   scaler = scaler, 
+                   verbose = True)
+    result_filenames.append('baseline_50_10.csv')
+    rmse_df.to_csv(result_filenames[-1], index=False)
+    
+
+    data_viz.boxplot_results(result_filenames)
+
+    
+    
+    
+    
+    
