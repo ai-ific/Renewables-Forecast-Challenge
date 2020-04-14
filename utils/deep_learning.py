@@ -42,12 +42,12 @@ def LSTMNet(units, input_size, use_dropout=False):
     if isinstance(units, (tuple, list)):
         for i in range(len(units)):
             if i==0:
-                model.add(LSTM(units[i], input_shape = input_size, return_sequences=True))
+                model.add(LSTM(units[i], activation='relu',  input_shape = input_size, return_sequences=True))
             else:
                 if i!=len(units)-1:
-                    model.add(LSTM(units[i], return_sequences=True))
+                    model.add(LSTM(units[i], activation='relu',  return_sequences=True))
                 else:
-                    model.add(LSTM(units[i], return_sequences=False))
+                    model.add(LSTM(units[i], activation='relu',  return_sequences=False))
     
     if use_dropout:
         model.add(Dropout(0.5))

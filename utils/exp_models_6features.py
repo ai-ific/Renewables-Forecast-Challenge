@@ -15,9 +15,7 @@ import deep_learning
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
 from keras.callbacks import EarlyStopping #, ModelCheckpoint
-from math import sqrt
 
 
 if __name__ == "__main__":
@@ -49,23 +47,6 @@ if __name__ == "__main__":
     # A correlation matrix to understand the data
     final_df = final_df.astype(np.float32)
     correlation = final_df.corr()
-
-    # Select variables 
-    selected_columns = ['Hour', 'Temperature', 'Dew Point', 'Humidity', 'Pressure', 'Demanda (W)']
-    working_df = final_df[selected_columns]
-    
-    # Dataset setting up & normalization
-    time_steps = 3
-    n_features = len(selected_columns)
-    norm_dataset, scaler = processing_utils.normalize_data(working_df) 
-    dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
-
-    # Train test split, data and target split and reshaping of input data for the network
-    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False)
-    Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
-    Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
-    Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
-    Xte = Xte.reshape(Xte.shape[0], time_steps, n_features)
     
     # Deep learning model setting up, callback definition and training
     # model set up
@@ -79,28 +60,6 @@ if __name__ == "__main__":
     #checkpointer = ModelCheckpoint(best_model_filename, monitor='val_loss', verbose=1, save_best_only=True)
     earlystopper = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
     
-    '''
-    model = deep_learning.LSTMNet(units=n_units, 
-                                  input_size=(Xtr.shape[1], Xtr.shape[2]))
-
-    model = deep_learning.LSTMNet(units=n_units, 
-                                  input_size=(batch_size, Xtr.shape[1], Xtr.shape[2]), 
-                                  stateful=True)
-
-   
-    
-    rmse_df = deep_learning.run_experiment(model, Xtr, Ytr, Xte, Yte,
-                   callback = [earlystopper],
-                   epochs = epochs,
-                   batch_size = batch_size,
-                   repeats = 30,
-                   validation_split = .1,
-                   scaler = scaler, 
-                   verbose = True)
-    '''    
-    '''
-    Solo queda la repeticion de experimentos y la mejora de la seleccion de redes
-    '''
     EPOCHS = 50
     BATCHSIZE = 64
     result_filenames = list()
@@ -117,7 +76,7 @@ if __name__ == "__main__":
     working_df = final_df[selected_columns]
     norm_dataset, scaler = processing_utils.normalize_data(working_df)
     dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
-    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False, random_state=20132018)
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=True, random_state=20132018)
     Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
     Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
     Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
@@ -132,7 +91,7 @@ if __name__ == "__main__":
                    validation_split = .1,
                    scaler = scaler, 
                    verbose = True)
-    result_filenames.append('model_6f_12.csv')
+    result_filenames.append('model_6f_12_shuffle.csv')
     rmse_df.to_csv(result_filenames[-1], index=False)
     
     '''
@@ -148,7 +107,7 @@ if __name__ == "__main__":
     working_df = final_df[selected_columns]
     norm_dataset, scaler = processing_utils.normalize_data(working_df)
     dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
-    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False, random_state=20132018)
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=True, random_state=20132018)
     Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
     Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
     Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
@@ -163,7 +122,7 @@ if __name__ == "__main__":
                    validation_split = .1,
                    scaler = scaler, 
                    verbose = True)
-    result_filenames.append('model_6f_50.csv')
+    result_filenames.append('model_6f_50_shuffle.csv')
     rmse_df.to_csv(result_filenames[-1], index=False)
     
     '''
@@ -179,7 +138,7 @@ if __name__ == "__main__":
     working_df = final_df[selected_columns]
     norm_dataset, scaler = processing_utils.normalize_data(working_df)
     dataset = processing_utils.series_to_supervised(norm_dataset, n_in=time_steps, n_out=1)
-    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=False, random_state=20132018)
+    data_training, data_test = train_test_split(dataset, train_size=.9, shuffle=True, random_state=20132018)
     Xtr, Ytr = processing_utils.dataset_to_XY(data_training, n_features)
     Xte, Yte = processing_utils.dataset_to_XY(data_test, n_features)
     Xtr = Xtr.reshape(Xtr.shape[0], time_steps, n_features)
@@ -195,7 +154,7 @@ if __name__ == "__main__":
                    validation_split = .1,
                    scaler = scaler, 
                    verbose = True)
-    result_filenames.append('model_6f_50_10.csv.csv')
+    result_filenames.append('model_6f_50_10_shuffle.csv')
     rmse_df.to_csv(result_filenames[-1], index=False)
     
 
